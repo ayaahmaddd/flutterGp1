@@ -5,49 +5,50 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:animate_do/animate_do.dart';
+import 'package:animate_do/animate_do.dart'; // For entry animations
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:intl/intl.dart';
 
-// import 'login_screen.dart'; // Import if needed for _handleAuthError
+// --- Make sure this import path is correct for your project ---
+import 'team_projects_page.dart'; // Placeholder for Team Projects Page
+// import 'login_screen.dart'; // Import if needed for _handleAuthError redirection
 
 class TeamDetailPage extends StatefulWidget {
   final String teamId;
   final String? initialTeamName;
-  final String companyId;            // ✅ جديد
-  final String companyName; 
-  
+  final String companyId;      // Required: ID of the parent company
+  final String companyName;    // Required: Name of the parent company
 
   const TeamDetailPage({
     super.key,
     required this.teamId,
     this.initialTeamName,
-     required this.companyId,         // ✅ جديد
-     required this.companyName,
-    // required this.companyId, 
+    required this.companyId,
+    required this.companyName,
   });
 
   @override
   State<TeamDetailPage> createState() => _TeamDetailPageState();
 }
 
-class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStateMixin { // Added TickerProviderStateMixin
+class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStateMixin {
   final _storage = const FlutterSecureStorage();
   final String _baseDomain = Platform.isAndroid ? "http://10.0.2.2:3000" : "http://localhost:3000";
-  late final String _teamDetailApiUrl;
-  late final String _addMemberApiUrl;
+  late final String _teamDetailApiUrl; // API to get team details (and members)
+  late final String _addMemberApiUrl;    // API to add a member to this team
 
-  Map<String, dynamic>? _teamData;
-  List<dynamic> _members = [];
+  Map<String, dynamic>? _teamData; // Holds all data for the current team
+  List<dynamic> _members = [];     // Holds the list of members for the current team
   bool _isLoading = true;
   String? _errorMessage;
   bool _isProcessingAction = false; // For the "Add Provider" dialog button
 
+  // Form key and controller for "Add Provider to Team" dialog
   final _addMemberFormKey = GlobalKey<FormState>();
   final TextEditingController _providerIdController = TextEditingController();
 
-  // UI Colors
+  // UI Colors (consistent with other pages for a cohesive look)
   final Color _appBarBackgroundColor1 = const Color(0xFFa3b29f).withOpacity(0.9);
   final Color _appBarBackgroundColor2 = const Color(0xFF697C6B).withOpacity(0.98);
   final Color _pageBackgroundColor1 = const Color(0xFFF2DEC5); // Beige
@@ -55,11 +56,10 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
   final Color _appBarTextColor = Colors.white;
   final Color _fabColor = const Color(0xFF4A5D52); // Dark olive for FAB
   final Color _cardColor = Colors.white.withOpacity(0.97); // For team info card
-  final Color _cardTextColor = const Color(0xFF33475B);
-  final Color _cardSecondaryTextColor = Colors.grey.shade700;
+  final Color _cardTextColor = const Color(0xFF33475B); // Dark slate blue for main text in cards
+  final Color _cardSecondaryTextColor = Colors.grey.shade700; // For secondary text in cards
   final Color _memberCardColor = Colors.white.withOpacity(0.94); // For member cards
-  final Color _headerTextColorOnGradient = Colors.white; // Text color for headers on gradient background
-
+  final Color _headerTextColorOnGradient = const Color(0xFF4A5D52); // Dark olive for headers on page background
 
   @override
   void initState() {
@@ -113,19 +113,27 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
 
       final responseBodyString = utf8.decode(response.bodyBytes);
       debugPrint("Fetch Team Details Response Status: ${response.statusCode}");
-      debugPrint("Fetch Team Details Response Body (Raw): $responseBodyString");
+      // debugPrint("Fetch Team Details Response Body (Raw): $responseBodyString"); // Uncomment for debugging
 
       if (response.statusCode == 200) {
         final data = jsonDecode(responseBodyString);
         if (data['success'] == true && data['team'] != null) {
           if (mounted) setState(() {
             _teamData = data['team'] as Map<String, dynamic>;
-            _members = _teamData?['members'] as List<dynamic>? ?? []; // Extract members list
+            // API for "Get one team info" includes members array directly
+            _members = _teamData?['members'] as List<dynamic>? ?? []; 
             _isLoading = false;
-            if(_members.isEmpty) _errorMessage = "No members in this team yet."; else _errorMessage = null;
+            if(_members.isEmpty && _teamData != null) { // If team data loaded but no members
+                _errorMessage = "No members in this team yet.";
+            } else if (_teamData == null) { // Should not happen if success is true and team is not null
+                _errorMessage = "Team data is unexpectedly null.";
+            }
+             else {
+                _errorMessage = null;
+            }
           });
         } else { throw Exception(data['message']?.toString() ?? 'Failed to parse team data from API'); }
-      } else if (response.statusCode == 401) { await _handleAuthError(); if(mounted) setState(() => _isLoading = false);
+      } else if (response.statusCode == 401) { await _handleAuthError(); if(mounted) setState(() {_isLoading = false; _errorMessage = "Unauthorized.";});
       } else if (response.statusCode == 404) { if(mounted) setState(() { _isLoading = false; _errorMessage = "Team not found."; });
       } else { 
         String errorMsg = 'Failed to load team details. Status: ${response.statusCode}';
@@ -138,14 +146,12 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
     }
   }
 
-  Future<void> _addProviderToTeam(StateSetter setDialogState) async { // Pass setDialogState for dialog's button
+  Future<void> _addProviderToTeam(StateSetter setDialogState) async {
     if (!_addMemberFormKey.currentState!.validate()) {
-      setDialogState(() => _isProcessingAction = false); // Reset dialog button if validation fails
+      setDialogState(() => _isProcessingAction = false);
       return;
     }
     if (!mounted) return;
-    // No need for global _isProcessingAction for this specific dialog action if managed by setDialogState
-    // setState(() => _isProcessingAction = true); // This affects the FAB, which is not what we want for dialog button
 
     final token = await _storage.read(key: 'auth_token');
     if (token == null || token.isEmpty) {
@@ -169,11 +175,11 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
       print("Add Provider Response Body (Raw): $responseBodyString");
       final responseBody = jsonDecode(responseBodyString);
 
-      if (response.statusCode == 201 || response.statusCode == 200) { // 201 Created or 200 OK
+      if (response.statusCode == 201 || response.statusCode == 200) {
         _showMessage(responseBody['message'] ?? "Provider added to team successfully!", isSuccess: true);
         _providerIdController.clear();
-        if (Navigator.canPop(context)) Navigator.of(context).pop(); // Close dialog
-        await _loadTeamDetails(showLoadingIndicator: false); // Refresh team details and members
+        if (Navigator.canPop(context)) Navigator.of(context).pop();
+        await _loadTeamDetails(showLoadingIndicator: false);
       } else {
         _showMessage(responseBody['message'] ?? "Failed to add provider (${response.statusCode})", isError: true);
       }
@@ -182,18 +188,18 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
       _showMessage("An error occurred: $e", isError: true);
     } finally {
       if (mounted) {
-         setDialogState(() => _isProcessingAction = false); // Reset dialog button state
+         setDialogState(() => _isProcessingAction = false);
       }
     }
   }
 
   void _showAddProviderDialog() {
     _providerIdController.clear();
-    bool isDialogButtonLoading = false; // Local state for dialog's button
+    bool isDialogButtonLoading = false;
 
     showDialog(
-      context: context, barrierDismissible: !isDialogButtonLoading, // Use local state
-      builder: (BuildContext dialogContext) { // Use a unique context name
+      context: context, barrierDismissible: !isDialogButtonLoading,
+      builder: (BuildContext dialogContext) {
         return StatefulBuilder(builder: (context, setDialogState) {
           return AlertDialog(
             title: Text("Add Provider to Team", style: GoogleFonts.lato(fontWeight: FontWeight.bold, color: _fabColor)),
@@ -227,8 +233,10 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
                 onPressed: isDialogButtonLoading ? null : () async { 
                     if (_addMemberFormKey.currentState!.validate()) { 
                         setDialogState(() => isDialogButtonLoading = true); 
-                        await _addProviderToTeam(setDialogState); // Pass the dialog's StateSetter
-                        // _addProviderToTeam will call setDialogState(false) in its finally block.
+                        await _addProviderToTeam(setDialogState);
+                        if (mounted && isDialogButtonLoading) { 
+                           setDialogState(() => isDialogButtonLoading = false); 
+                        }
                     }
                 },
                 style: ElevatedButton.styleFrom(backgroundColor: _fabColor, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
@@ -237,8 +245,7 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
           );
         });
       },
-    );
-    // No .then() needed here to reset _isProcessingAction if dialog's button has its own state.
+    ).then((_){ if(mounted && _isProcessingAction) setState(()=> _isProcessingAction = false); });
   }
 
   String _formatTeamDate(String? dateStr) {
@@ -253,61 +260,34 @@ class _TeamDetailPageState extends State<TeamDetailPage> with TickerProviderStat
       padding: const EdgeInsets.symmetric(vertical: 7.0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Icon(icon, size: 20, color: iconColor ?? _fabColor.withOpacity(0.8)), const SizedBox(width: 12),
-          Text("$label: ", style: GoogleFonts.lato(fontSize: 15.5, fontWeight: FontWeight.w600, color: labelColor ?? Colors.black.withOpacity(0.8))),
-          Expanded(child: Text(value, style: GoogleFonts.lato(fontSize: 15.5, color: valueColor ?? Colors.black.withOpacity(0.7)))),
+          Text("$label: ", style: GoogleFonts.lato(fontSize: 15.5, fontWeight: FontWeight.w600, color: labelColor ?? _cardTextColor.withOpacity(0.9))),
+          Expanded(child: Text(value, style: GoogleFonts.lato(fontSize: 15.5, color: valueColor ?? _cardTextColor.withOpacity(0.8)))),
       ]),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    
     String displayTeamName = _isLoading ? (widget.initialTeamName ?? "Loading Team...") : (_teamData?['name']?.toString() ?? "Team Details");
-    String displayCompanyName = _teamData?['company_name']?.toString() ?? "Company"; // From team details API
+    // Company name for display will come from the widget parameter, as API for team details might not always include it.
+    String displayCompanyNameForInfoCard = widget.companyName; 
 
     return Scaffold(
-    appBar: AppBar(
-title: Text(
-  "${_teamData?['company_name'] ?? ''} - Teams",
-  style: GoogleFonts.lato(
-    color: _appBarTextColor,
-    fontWeight: FontWeight.w700,
-    fontSize: 20,
-  ),
-  overflow: TextOverflow.ellipsis,
-),
-
-
-  flexibleSpace: Container(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        colors: [_appBarBackgroundColor1, _appBarBackgroundColor2],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
+      appBar: AppBar(
+        title: Text(displayTeamName, style: GoogleFonts.lato(color: _appBarTextColor, fontWeight: FontWeight.bold, fontSize: 20), overflow: TextOverflow.ellipsis),
+        flexibleSpace: Container(decoration: BoxDecoration(gradient: LinearGradient(colors: [_appBarBackgroundColor1, _appBarBackgroundColor2], begin: Alignment.topLeft, end: Alignment.bottomRight))),
+        elevation: 2, iconTheme: IconThemeData(color: _appBarTextColor),
+        actions: [ if (!_isLoading && _teamData != null) IconButton(icon: Icon(Icons.refresh_rounded, color: _appBarTextColor), onPressed: _loadTeamDetails, tooltip: "Refresh Team Details")],
       ),
-    ),
-  ),
-  elevation: 2,
-  iconTheme: IconThemeData(color: _appBarTextColor),
-  actions: [
-    if (!_isLoading && _teamData != null)
-      IconButton(
-        icon: Icon(Icons.refresh_rounded, color: _appBarTextColor),
-        onPressed: _loadTeamDetails,
-        tooltip: "Refresh Team Details",
-      ),
-  ],
-),
-
       body: Container(
         decoration: BoxDecoration(gradient: LinearGradient(colors: [_pageBackgroundColor1, _pageBackgroundColor2.withOpacity(0.85), _pageBackgroundColor2], begin: Alignment.topCenter, end: Alignment.bottomCenter, stops: const [0.0, 0.35, 1.0])),
         child: SafeArea(
           child: _isLoading
               ? Center(child: CircularProgressIndicator(color: _appBarTextColor.withOpacity(0.8)))
               : _errorMessage != null && _teamData == null
-                  ? _buildErrorWidget(_fabColor) // Error text color can be darker on this background
+                  ? _buildErrorWidget(_headerTextColorOnGradient)
                   : _teamData == null
-                      ? Center(child: Text("No team data available.", style: GoogleFonts.lato(fontSize: 18, color: _fabColor.withOpacity(0.7))))
+                      ? Center(child: Text("No team data available.", style: GoogleFonts.lato(fontSize: 18, color: _headerTextColorOnGradient.withOpacity(0.7))))
                       : Column(
                           children: [
                             Expanded(
@@ -316,9 +296,9 @@ title: Text(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    _buildTeamInfoCard(displayCompanyName),
+                                    _buildTeamInfoCard(displayCompanyNameForInfoCard),
                                     const SizedBox(height: 28),
-                                    _buildTeamMembersSection(_members, _fabColor), // Header text color for members section
+                                    _buildTeamMembersSection(_members, _headerTextColorOnGradient),
                                   ],
                                 ),
                               ),
@@ -327,30 +307,85 @@ title: Text(
                         ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isLoading || _teamData == null ? null : _showAddProviderDialog, // Disable if still loading team details
-        label: Text("Add Member", style: GoogleFonts.lato(fontWeight: FontWeight.w600, color: Colors.white)),
-        icon: const Icon(Icons.person_add_rounded, color: Colors.white),
-        backgroundColor: _fabColor,
-        elevation: 8,
-      ),
+   
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 
-  Widget _buildTeamInfoCard(String companyName) {
-    return FadeInDown(duration: const Duration(milliseconds: 450), child: Card(
-        elevation: 5, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)), color: _cardColor,
-        child: Padding(padding: const EdgeInsets.all(20.0), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_teamData!['name']?.toString() ?? 'Team Name', style: GoogleFonts.lato(fontSize: 22, fontWeight: FontWeight.bold, color: _cardTextColor)),
-              const SizedBox(height: 12), Divider(color: Colors.grey.shade200, thickness: 0.8), const SizedBox(height: 12),
-              Text(_teamData!['description']?.toString() ?? 'No description.', style: GoogleFonts.lato(fontSize: 16, color: _cardTextColor.withOpacity(0.85), height: 1.5)),
-              const SizedBox(height: 20),
-              _buildInfoRow(Icons.business_rounded, "Company", companyName, iconColor: Colors.indigo.shade400, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
-              _buildInfoRow(Icons.group_work_rounded, "Members", (_teamData!['member_count'] ?? _members.length).toString(), iconColor: Colors.purple.shade400, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
-              _buildInfoRow(Icons.calendar_month_rounded, "Created", _formatTeamDate(_teamData!['created']?.toString()), iconColor: Colors.green.shade500, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
-              _buildInfoRow(Icons.edit_calendar_rounded, "Last Updated", _formatTeamDate(_teamData!['updated']?.toString()), iconColor: Colors.orange.shade600, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
-        ]))));
+  Widget _buildTeamInfoCard(String companyNameForDisplay) {
+    return FadeInDown(
+      duration: const Duration(milliseconds: 450),
+      child: Stack(
+        children: [
+          Card(
+            elevation: 5,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            color: _cardColor,
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _teamData!['name']?.toString() ?? 'Team Name',
+                          style: GoogleFonts.lato(fontSize: 22, fontWeight: FontWeight.bold, color: _cardTextColor),
+                        ),
+                      ),
+                      const SizedBox(width: 40), // Space for the icon button
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Divider(color: Colors.grey.shade200, thickness: 0.8),
+                  const SizedBox(height: 12),
+                  Text(
+                    _teamData!['description']?.toString() ?? 'No description.',
+                    style: GoogleFonts.lato(fontSize: 16, color: _cardTextColor.withOpacity(0.85), height: 1.5),
+                  ),
+                  const SizedBox(height: 20),
+                  _buildInfoRow(Icons.business_rounded, "Company", companyNameForDisplay, iconColor: Colors.indigo.shade400, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
+                  _buildInfoRow(Icons.group_work_rounded, "Members", (_teamData!['member_count'] ?? _members.length).toString(), iconColor: Colors.purple.shade400, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
+                  _buildInfoRow(Icons.calendar_month_rounded, "Created", _formatTeamDate(_teamData!['created']?.toString()), iconColor: Colors.green.shade500, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
+                  _buildInfoRow(Icons.edit_calendar_rounded, "Last Updated", _formatTeamDate(_teamData!['updated']?.toString()), iconColor: Colors.orange.shade600, labelColor: _cardTextColor, valueColor: _cardSecondaryTextColor),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Bounce(
+              delay: const Duration(milliseconds: 600),
+              child: Material(
+                color: Colors.transparent, shape: const CircleBorder(), clipBehavior: Clip.antiAlias,
+                child: IconButton(
+                  icon: Icon(Icons.folder_shared_outlined, color: Colors.blueGrey.shade600, size: 28),
+                  tooltip: "Team Projects", padding: const EdgeInsets.all(8), constraints: const BoxConstraints(),
+                  onPressed: () {
+                    if (_teamData == null) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => TeamProjectsPage(
+                          teamId: widget.teamId,
+                          teamName: _teamData!['name']?.toString() ?? widget.initialTeamName ?? 'Team',
+                          companyId: widget.companyId, // Passed from CompanyTeamsPage
+                          companyName: widget.companyName, // Passed from CompanyTeamsPage
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildTeamMembersSection(List members, Color headerTextColor) {
@@ -385,23 +420,27 @@ title: Text(
             final member = members[index] as Map<String, dynamic>;
             final String memberName = "${member['first_name'] ?? ''} ${member['last_name'] ?? ''}".trim();
             final String memberEmail = member['email']?.toString() ?? 'N/A';
-            final String memberPosition = member['position']?.toString() ?? 'N/A';
+            final String memberPosition = member['position']?.toString() ?? 'N/A'; // From API
             final String imageUrl = member['image_url']?.toString() ?? 'https://via.placeholder.com/100/B0BEC5/FFFFFF?Text=...';
 
-            return BounceInUp(delay: Duration(milliseconds: 150 * (index + 1)), duration: const Duration(milliseconds: 400), child: Card(
-                elevation: 3.5, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), color: _memberCardColor,
-                child: InkWell(
-                  onTap: (){ _showMessage("Viewing details for $memberName (TODO)"); },
-                  borderRadius: BorderRadius.circular(13),
-                  child: Padding(padding: const EdgeInsets.all(10.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        CircleAvatar(radius: 30, backgroundColor: Colors.grey.shade200, backgroundImage: NetworkImage(imageUrl), onBackgroundImageError: (e,s){}, child: imageUrl.contains('placeholder.com') ? const Icon(Icons.person_outline_rounded, size: 30, color: Colors.grey) : null),
-                        const SizedBox(height: 8),
-                        Text(memberName.isEmpty ? "Unnamed Member" : memberName, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.lato(fontSize: 13.5, fontWeight: FontWeight.w600, color: _cardTextColor)),
-                        if (memberPosition != 'N/A') ...[const SizedBox(height: 3), Text(memberPosition, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.lato(fontSize: 11.5, color: const Color(0xFF4A5D52).withOpacity(0.8), fontWeight: FontWeight.w500))],
-                        const SizedBox(height: 3),
-                        Text(memberEmail, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.lato(fontSize: 10.5, color: _cardSecondaryTextColor)),
-                  ])),
-                ),
+            return BounceInUp( // Entry animation for the card
+                delay: Duration(milliseconds: 150 * (index + 1)), 
+                duration: const Duration(milliseconds: 400), 
+                child: Card(
+                    elevation: 3.5, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), 
+                    color: _memberCardColor, // Light color for member card
+                    child: InkWell(
+                      onTap: (){ _showMessage("Viewing details for $memberName (TODO)"); },
+                      borderRadius: BorderRadius.circular(13),
+                      child: Padding(padding: const EdgeInsets.all(10.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                            CircleAvatar(radius: 30, backgroundColor: Colors.grey.shade200, backgroundImage: NetworkImage(imageUrl), onBackgroundImageError: (e,s){}, child: imageUrl.contains('placeholder.com') ? const Icon(Icons.person_outline_rounded, size: 30, color: Colors.grey) : null),
+                            const SizedBox(height: 8),
+                            Text(memberName.isEmpty ? "Unnamed Member" : memberName, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.lato(fontSize: 13.5, fontWeight: FontWeight.w600, color: _cardTextColor)),
+                            if (memberPosition != 'N/A' && memberPosition.isNotEmpty) ...[const SizedBox(height: 3), Text(memberPosition, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.lato(fontSize: 11.5, color: _fabColor.withOpacity(0.8), fontWeight: FontWeight.w500))], // Using _fabColor for position
+                            const SizedBox(height: 3),
+                            Text(memberEmail, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.lato(fontSize: 10.5, color: _cardSecondaryTextColor)),
+                      ])),
+                    ),
             ));
           },
         ),

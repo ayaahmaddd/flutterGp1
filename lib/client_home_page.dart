@@ -1,0 +1,1260 @@
+// client_home_page.dart
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:animate_do/animate_do.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:intl/intl.dart'; 
+
+import 'edit_client_profile_page.dart';
+import 'login.dart';
+import 'create_task_page.dart';
+import 'update_task_page.dart';
+import 'provider_profile_page.dart'; 
+import 'company_detail_page.dart'; 
+
+class ClientHomePage extends StatefulWidget {
+  const ClientHomePage({super.key});
+
+  @override
+  State<ClientHomePage> createState() => _ClientHomePageState();
+}
+
+class _ClientHomePageState extends State<ClientHomePage> {
+  final _storage = const FlutterSecureStorage();
+  final String _baseUrl = Platform.isAndroid ? "http://10.0.2.2:3000" : "http://localhost:3000";
+  Map<String, dynamic>? _clientDataForAvatar;
+  bool _isLoadingAvatar = true;
+
+  final TextEditingController _searchQueryController = TextEditingController();
+  String _currentSearchQueryText = "";
+  String _searchTypeForAPIAppBar = 'providers';
+
+  List<dynamic> _results = [];
+  bool _isProcessing = false; 
+  String? _resultsErrorMessage;
+  String _lastOperationResultType = 'providers'; 
+
+  String? _selectedFilterTypeDialog = 'providers'; 
+  final TextEditingController _filterCityController = TextEditingController();
+  final TextEditingController _filterCategoryController = TextEditingController(); 
+  String? _selectedMinRatingDialog;
+
+  final List<String> _filterTypeOptions = ['companies', 'providers'];
+  final List<String> _ratingOptionsForFilter = ['Any Rating', '1', '2', '3', '4', '5'];
+
+  List<dynamic> _allMyTasksOriginal = []; 
+  List<dynamic> _approvedTasksOriginal = []; 
+  bool _isLoadingMyTasks = true;
+  String? _myTasksErrorMessage;
+  List<int> _globallyHiddenTaskIds = [];
+
+  int _currentIndex = 0;
+
+  final Color _pageBackgroundColorTop = const Color(0xFFFAF3E0);
+  final Color _pageBackgroundColorBottom = const Color(0xFFA3B29F);
+  final Color _appBarColor = Colors.white;
+  final Color _appBarItemColor = const Color(0xFF4A5D52);
+  final Color _iconColor = const Color(0xFF4A5D52);
+  final Color _primaryTextColor = const Color(0xFF3A3A3A);
+  final Color _secondaryTextColor = Colors.grey.shade700;
+  final Color _cardBackgroundColor = Colors.white.withOpacity(0.97);
+  final Color _activeBottomNavItemColor = const Color(0xFF4A5D52);
+  final Color _inactiveBottomNavItemColor = Colors.grey.shade500;
+  final Color _filterButtonColor = const Color(0xFF4A5D52);
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedMinRatingDialog = _ratingOptionsForFilter.isNotEmpty ? _ratingOptionsForFilter.first : null;
+    _selectedFilterTypeDialog = _filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers';
+    _searchTypeForAPIAppBar = _filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers';
+    _lastOperationResultType = _filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers';
+    
+    _loadClientProfileForAvatar();
+    _fetchMyTasks();
+    _loadInitialBrowseContent();
+  }
+
+  @override
+  void dispose(){
+    _searchQueryController.dispose();
+    _filterCityController.dispose();
+    _filterCategoryController.dispose();
+    super.dispose();
+  }
+
+  void _showMessage(String message, {bool isError = false, bool isSuccess = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message, style: GoogleFonts.lato(color: Colors.white)),
+      backgroundColor: isError ? Theme.of(context).colorScheme.error : (isSuccess ? Colors.green.shade600 : _iconColor),
+      duration: const Duration(seconds: 3),
+      behavior: SnackBarBehavior.floating, elevation: 6.0, margin: const EdgeInsets.all(12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ));
+  }
+  
+  Future<void> _handleAuthError({String message = 'Session expired. Please log in again.'}) async {
+    if (!mounted) return;
+    _showMessage(message, isError: true);
+    await _storage.deleteAll();
+    if (mounted) { 
+      Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (r)=> false);
+    }
+  }
+
+  Future<void> _loadClientProfileForAvatar() async {
+    if(!mounted) return;
+    setState(() => _isLoadingAvatar = true);
+    final token = await _storage.read(key: 'auth_token');
+    if (token == null || token.isEmpty) {
+      if (mounted) setState(() => _isLoadingAvatar = false);
+      return;
+    }
+    final url = Uri.parse("$_baseUrl/api/client/profile");
+    try {
+      final response = await http.get(url, headers: {'Authorization': 'Bearer $token'});
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        if (data['success'] == true && data['client'] != null) {
+          setState(() { _clientDataForAvatar = data['client']; _isLoadingAvatar = false; });
+        } else { if (mounted) setState(() => _isLoadingAvatar = false); }
+      } else { 
+          if (mounted) setState(() => _isLoadingAvatar = false); 
+          if (response.statusCode == 401) _handleAuthError();
+      }
+    } catch (_) { if (mounted) setState(() => _isLoadingAvatar = false); }
+  }
+  
+  void _navigateToEditProfile() async {
+    final result = await Navigator.push(context, MaterialPageRoute(builder: (_) => const EditClientProfilePage()));
+    if (result == true && mounted) {
+      _loadClientProfileForAvatar(); 
+    }
+  }
+
+  Future<void> _logout() async {
+    final bool? confirmLogout = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: Text('Confirm Logout', style: GoogleFonts.lato(fontWeight: FontWeight.bold)),
+        content: Text('Are you sure you want to log out?', style: GoogleFonts.lato()),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        actions: [
+          TextButton(child: Text('Cancel', style: GoogleFonts.lato(color: Colors.grey.shade700)), onPressed: () => Navigator.of(dialogContext).pop(false)),
+          TextButton(child: Text('Logout', style: GoogleFonts.lato(color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.bold)), onPressed: () => Navigator.of(dialogContext).pop(true)),
+        ],
+      )
+    );
+    if (confirmLogout == true && mounted) {
+      await _handleAuthError(message: "Logged out successfully.");
+    }
+  }
+
+  Future<void> _fetchMyTasks() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingMyTasks = true;
+      _myTasksErrorMessage = null;
+    });
+    final token = await _storage.read(key: 'auth_token');
+    if (token == null || token.isEmpty) {
+      _handleAuthError();
+      if (mounted) setState(() => _isLoadingMyTasks = false);
+      return;
+    }
+    final url = Uri.parse("$_baseUrl/api/client/tasks");
+    print("--- Client Home: Fetching My Tasks from $url ---");
+    try {
+      final response = await http.get(url, headers: {'Authorization': 'Bearer $token'});
+      if (!mounted) return;
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      if (response.statusCode == 200 && data['success'] == true) {
+        final fetchedTasks = data['tasks'] as List<dynamic>? ?? [];
+        setState(() {
+          _allMyTasksOriginal = fetchedTasks;
+          _approvedTasksOriginal = fetchedTasks.where((task) {
+            final status = task['status']?.toString().toLowerCase() ?? '';
+            return status == 'approved' || status == 'accepted';
+          }).toList();
+          _isLoadingMyTasks = false;
+          if (_allMyTasksOriginal.isEmpty) {
+            _myTasksErrorMessage = "You have no tasks yet. Create one!";
+          }
+        });
+      } else {
+        if(response.statusCode == 401) _handleAuthError();
+        throw Exception(data['message'] ?? "Failed to load tasks (${response.statusCode})");
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingMyTasks = false;
+          _myTasksErrorMessage = e.toString().replaceFirst("Exception: ", "");
+        });
+      }
+    }
+  }
+
+  void _loadInitialBrowseContent(){
+    if (mounted) {
+      setState(() {
+        _isProcessing = false; 
+        _results = [];
+        _resultsErrorMessage = null;
+        _searchQueryController.clear();
+        _currentSearchQueryText = "";
+        _filterCityController.clear();
+        _filterCategoryController.clear();
+        _selectedFilterTypeDialog = _filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers';
+        _searchTypeForAPIAppBar = _filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers';
+        _lastOperationResultType = _filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers';
+        _selectedMinRatingDialog = _ratingOptionsForFilter.isNotEmpty ? _ratingOptionsForFilter.first : null;
+        print("Resetting search/filter states for ClientHomePage, will show tasks.");
+      });
+      if(_allMyTasksOriginal.isEmpty && !_isLoadingMyTasks) {
+          _fetchMyTasks();
+      }
+    }
+  }
+
+  Future<void> _performSearchOrFilter({String? queryFromSearchField, bool isFilterSearch = false}) async {
+    if (!mounted) return;
+    setState(() {
+      _isProcessing = true;
+      _resultsErrorMessage = null;
+      _results = []; 
+      if (queryFromSearchField != null) _currentSearchQueryText = queryFromSearchField;
+    });
+
+    final token = await _storage.read(key: 'auth_token');
+    if (token == null || token.isEmpty) { 
+      if (mounted) setState(() { _isProcessing = false; _resultsErrorMessage = "Authentication token missing."; });
+      _handleAuthError();
+      return; 
+    }
+
+    Uri apiUri;
+    String operationType = "";
+    Map<String, String> queryParams = {};
+    String currentResultType = _filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers';
+
+    if (isFilterSearch) {
+      operationType = "Filtering";
+      currentResultType = _selectedFilterTypeDialog ?? (_filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers');
+      queryParams['type'] = currentResultType;
+      
+      final cityToFilter = _filterCityController.text.trim();
+      if (cityToFilter.isNotEmpty) queryParams['city'] = cityToFilter;
+      
+      final categoryToFilter = _filterCategoryController.text.trim();
+      // تعديل: أرسل الفئة فقط إذا كان النوع providers
+      if (currentResultType == 'providers' && categoryToFilter.isNotEmpty) {
+        queryParams['category'] = categoryToFilter;
+      } else if (currentResultType == 'companies' && categoryToFilter.isNotEmpty) {
+         print("Note: Category filter for 'companies' is currently not sent unless API supports a specific key like 'industry'.");
+      }
+
+      if (_selectedMinRatingDialog != null && _selectedMinRatingDialog!.toLowerCase() != 'any rating') {
+        queryParams['minRating'] = _selectedMinRatingDialog!;
+      }
+      
+      bool noSpecificFilters = cityToFilter.isEmpty &&
+                              !(currentResultType == 'providers' && categoryToFilter.isNotEmpty) && // لا نعتبر الفئة فلترًا إذا كانت للشركات (ما لم يدعمها الـ API)
+                              (_selectedMinRatingDialog == null || _selectedMinRatingDialog!.toLowerCase() == 'any rating');
+
+      if (queryParams.length <= 1 && noSpecificFilters) { // يجب أن يكون هناك على الأقل فلتر واحد غير النوع
+         if (mounted) setState(() { _isProcessing = false; _results = []; _resultsErrorMessage = "Please select at least one filter criteria (City, Category for Providers, or Rating)."; });
+         return;
+      }
+      apiUri = Uri.parse("$_baseUrl/api/client/filter").replace(queryParameters: queryParams);
+      setState(() { _searchTypeForAPIAppBar = currentResultType; }); // مزامنة نوع AppBar مع نوع الفلتر
+    } else { 
+      operationType = "Searching";
+      currentResultType = _searchTypeForAPIAppBar;
+      queryParams['type'] = currentResultType;
+
+      if (_currentSearchQueryText.isEmpty) {
+         if (mounted) setState(() { _isProcessing = false; _results = []; });
+         _loadInitialBrowseContent(); // العودة لعرض المهام
+         return;
+      }
+      queryParams['query'] = _currentSearchQueryText;
+      apiUri = Uri.parse("$_baseUrl/api/client/search").replace(queryParameters: queryParams);
+       setState(() { _selectedFilterTypeDialog = currentResultType; }); // مزامنة نوع الفلتر مع نوع البحث
+    }
+    
+    print("--- ClientHomePage: $operationType from $apiUri --- Query Params: $queryParams");
+    try {
+      final response = await http.get(apiUri, headers: {'Authorization': 'Bearer $token'});
+      if (!mounted) return;
+      final data = json.decode(utf8.decode(response.bodyBytes));
+
+      if (response.statusCode == 200 && data['success'] == true) {
+        setState(() {
+          _results = data['results'] as List<dynamic>? ?? [];
+          _isProcessing = false;
+          _lastOperationResultType = currentResultType;
+          if (_results.isEmpty) {
+            _resultsErrorMessage = isFilterSearch ? "No results match your filters." : "No results found for '$_currentSearchQueryText' in ${currentResultType.myCapitalizeFirst()}.";
+          }
+        });
+      } else {
+        if (response.statusCode == 401) _handleAuthError();
+        throw Exception(data['message'] ?? "$operationType failed (${response.statusCode})");
+      }
+    } catch (e) {
+      if (mounted) setState(() { _isProcessing = false; _resultsErrorMessage = e.toString(); });
+    }
+  }
+  
+  void _showFilterDialog() {
+    String? tempDialogFilterType = _selectedFilterTypeDialog;
+    TextEditingController tempCityController = TextEditingController(text: _filterCityController.text);
+    TextEditingController tempCategoryController = TextEditingController(text: _filterCategoryController.text);
+    String? tempDialogMinRating = _selectedMinRatingDialog;
+
+    showModalBottomSheet(
+      context: context, isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      builder: (modalContext) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            bool isCategoryEnabledForFilter = tempDialogFilterType == 'providers';
+
+            return Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(modalContext).viewInsets.bottom + 20, left: 20, right: 20, top: 25),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(child: Text("Set Filters", style: GoogleFonts.lato(fontSize: 22, fontWeight: FontWeight.bold, color: _iconColor))),
+                    const SizedBox(height: 25),
+
+                    Text("Filter For:", style: GoogleFonts.lato(fontWeight: FontWeight.w600, fontSize: 16, color: _primaryTextColor)),
+                    DropdownButtonFormField<String>(
+                      value: tempDialogFilterType,
+                      items: _filterTypeOptions.map((type) => DropdownMenuItem(value: type, child: Text(type.myCapitalizeFirst(), style: GoogleFonts.lato()))).toList(),
+                      onChanged: (value) {
+                        setModalState(() {
+                          tempDialogFilterType = value;
+                          isCategoryEnabledForFilter = tempDialogFilterType == 'providers';
+                          if (!isCategoryEnabledForFilter) {
+                            tempCategoryController.clear(); 
+                          }
+                        });
+                      },
+                      decoration: _customInputDecorationForFilter(null, Icons.business_center_rounded),
+                      validator: (v) => v == null ? 'Type is required' : null,
+                    ),
+                    const SizedBox(height: 18),
+
+                    Text("Category:", style: GoogleFonts.lato(fontWeight: FontWeight.w600, color: _primaryTextColor, fontSize: 16)),
+                    TextFormField(
+                       controller: tempCategoryController,
+                       decoration: _customInputDecorationForFilter(
+                          isCategoryEnabledForFilter ? "Enter Category (e.g., Plumber)" : "Category (for Providers only)", 
+                          Icons.category_outlined
+                        ),
+                       enabled: isCategoryEnabledForFilter,
+                       style: TextStyle(color: isCategoryEnabledForFilter ? _primaryTextColor : Colors.grey.shade500),
+                    ),
+                    const SizedBox(height: 18),
+
+                    Text("City:", style: GoogleFonts.lato(fontWeight: FontWeight.w600, color: _primaryTextColor, fontSize: 16)),
+                    TextFormField(
+                       controller: tempCityController,
+                       decoration: _customInputDecorationForFilter("Enter City Name", Icons.location_city_rounded),
+                    ),
+                    const SizedBox(height: 18),
+
+                    Text("Minimum Rating:", style: GoogleFonts.lato(fontWeight: FontWeight.w600, color: _primaryTextColor, fontSize: 16)),
+                    DropdownButtonFormField<String>(
+                      value: tempDialogMinRating,
+                      items: _ratingOptionsForFilter.map((rating) => DropdownMenuItem(
+                        value: rating,
+                        child: rating == "Any Rating" 
+                               ? Text(rating, style: GoogleFonts.lato()) 
+                               : Row(children: [Text("$rating ", style: GoogleFonts.lato()), ...List.generate(int.tryParse(rating) ?? 0, (i) => Icon(Icons.star_rounded, color: Colors.amber, size: 20))])
+                      )).toList(),
+                      onChanged: (value) => setModalState(() => tempDialogMinRating = value),
+                      decoration: _customInputDecorationForFilter(null, Icons.star_border_rounded),
+                    ),
+                    const SizedBox(height: 30),
+
+                    SizedBox(width: double.infinity, child: ElevatedButton.icon(
+                        icon: const Icon(Icons.filter_alt_rounded, color: Colors.white),
+                        label: Text("Apply Filters", style: GoogleFonts.lato(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                        onPressed: () {
+                          if (tempDialogFilterType == null) { _showMessage("Please select a filter type.", isError: true); return; }
+                          setState(() {
+                            _selectedFilterTypeDialog = tempDialogFilterType;
+                            _filterCityController.text = tempCityController.text.trim();
+                            _filterCategoryController.text = (tempDialogFilterType == 'providers') ? tempCategoryController.text.trim() : '';
+                            _selectedMinRatingDialog = tempDialogMinRating;
+                          });
+                          Navigator.pop(modalContext);
+                          _performSearchOrFilter(isFilterSearch: true);
+                        },
+                        style: ElevatedButton.styleFrom(backgroundColor: _filterButtonColor, padding: const EdgeInsets.symmetric(vertical: 15), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    )),
+                    const SizedBox(height: 10),
+                    SizedBox(width: double.infinity, child: TextButton(
+                        onPressed: (){
+                           setModalState(() { 
+                             tempDialogFilterType = _filterTypeOptions.first; 
+                             tempCityController.clear(); 
+                             tempCategoryController.clear();
+                             tempDialogMinRating = _ratingOptionsForFilter.first; 
+                            });
+                           _loadInitialBrowseContent();
+                           Navigator.pop(modalContext);
+                        },
+                        child: Text("Clear Filters & Show Tasks", style: GoogleFonts.lato(color: _iconColor, fontWeight: FontWeight.w500))
+                    )),
+                    const SizedBox(height: 10),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).then((_){
+      if(_results.isEmpty && _searchQueryController.text.isEmpty) {
+        setState(() {
+          _selectedFilterTypeDialog = _searchTypeForAPIAppBar;
+        });
+      }
+    });
+  }
+  
+  InputDecoration _customInputDecorationForFilter(String? hint, IconData? icon) {
+    return InputDecoration(
+      hintText: hint ?? "Select an option",
+      hintStyle: GoogleFonts.lato(color: _secondaryTextColor.withOpacity(0.7), fontSize: 14),
+      prefixIcon: icon != null ? Icon(icon, color: _iconColor.withOpacity(0.6), size: 20) : null,
+      filled: true, fillColor: Colors.grey.shade100.withOpacity(0.7),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.grey.shade300, width: 0.8)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.grey.shade300, width: 0.8)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: _iconColor, width: 1.5)),
+    );
+  }
+// ... (داخل _ClientHomePageState)
+
+  void _showProfileDialog() {
+    if (_clientDataForAvatar == null && !_isLoadingAvatar) _loadClientProfileForAvatar(); 
+    showModalBottomSheet(
+      context: context, isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      backgroundColor: _pageBackgroundColorTop.withOpacity(0.98),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          // استدعاء _loadClientProfileForAvatar مرة أخرى إذا لم يتم تحميل البيانات بعد
+          if (_clientDataForAvatar == null && !_isLoadingAvatar) {
+             WidgetsBinding.instance.addPostFrameCallback((_) {
+                _loadClientProfileForAvatar().then((_) {
+                  if (mounted) setDialogState(() {}); // أعد بناء الـ dialog بعد تحميل البيانات
+                });
+             });
+          }
+
+          if (_isLoadingAvatar || _clientDataForAvatar == null) {
+            return Container(
+              height: 200, 
+              padding: const EdgeInsets.all(32), 
+              child: Center(
+                child: _isLoadingAvatar 
+                       ? CircularProgressIndicator(color: _iconColor) 
+                       : Text("Could not load profile. Please try again.", style: GoogleFonts.lato(color: _primaryTextColor))
+              )
+            );
+          }
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 20, right: 20, top: 25),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Text("My Profile", style: GoogleFonts.lato(fontSize: 22, fontWeight: FontWeight.bold, color: _iconColor)), const SizedBox(height: 20),
+                CircleAvatar(
+                  radius: 45, backgroundColor: Colors.grey.shade300,
+                  backgroundImage: (_clientDataForAvatar?["image_url"]?.toString() != null && (_clientDataForAvatar!["image_url"].toString()).isNotEmpty && Uri.tryParse(_clientDataForAvatar!["image_url"].toString())?.hasAbsolutePath == true) ? NetworkImage(_clientDataForAvatar!["image_url"].toString()) : null,
+                  child: (_clientDataForAvatar?["image_url"] == null || (_clientDataForAvatar!["image_url"].toString()).isEmpty || Uri.tryParse(_clientDataForAvatar!["image_url"].toString())?.hasAbsolutePath != true) ? Icon(Icons.person, size: 45, color: Colors.grey.shade500) : null,
+                ),
+                const SizedBox(height: 15),
+                Text("${_clientDataForAvatar?["first_name"] ?? ''} ${_clientDataForAvatar?["last_name"] ?? ''}".trim(), style: GoogleFonts.lato(fontSize: 19, fontWeight: FontWeight.bold, color: _primaryTextColor)),
+                const SizedBox(height: 5),
+                Text(_clientDataForAvatar?["email"]?.toString() ?? '-', style: GoogleFonts.lato(fontSize: 14.5, color: _secondaryTextColor)),
+                const SizedBox(height: 18), Divider(color: Colors.grey.shade300), const SizedBox(height: 12),
+                _buildProfileInfoRowInDialog(FontAwesomeIcons.phone, "Phone", _clientDataForAvatar?["phone"]?.toString()),
+                _buildProfileInfoRowInDialog(FontAwesomeIcons.city, "City", _clientDataForAvatar?["city_name"]?.toString() ?? _clientDataForAvatar?["city"]?.toString()),
+                _buildProfileInfoRowInDialog(FontAwesomeIcons.mapPin, "Zip Code", _clientDataForAvatar?["zip_code"]?.toString()),
+                if (_clientDataForAvatar?["facebook_url"] != null && (_clientDataForAvatar!["facebook_url"].toString()).isNotEmpty && _clientDataForAvatar!["facebook_url"].toString().toLowerCase() != 'test')
+                    _buildProfileInfoRowInDialog(FontAwesomeIcons.facebookF, "Facebook", _clientDataForAvatar?["facebook_url"].toString()),
+                const SizedBox(height: 25),
+                Row( // استخدام Row لوضع الأزرار بجانب بعضها إذا كان هناك مساحة
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: () { Navigator.pop(context); _navigateToEditProfile(); },
+                      icon: const Icon(Icons.edit_note_rounded, color: Colors.white, size: 18), 
+                      label: Text("Edit Profile", style: GoogleFonts.lato(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                      style: ElevatedButton.styleFrom(backgroundColor: _iconColor, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 3),
+                    ),
+                     TextButton.icon(
+                      icon: Icon(Icons.logout_rounded, color: Theme.of(context).colorScheme.error, size: 18),
+                      label: Text("Logout", style: GoogleFonts.lato(color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.bold, fontSize: 15)),
+                      onPressed: () {
+                        Navigator.pop(context); // أغلق الـ dialog أولاً
+                        _logout();
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+            ]),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildProfileInfoRowInDialog(IconData icon, String label, String? value) {
+    if (value == null || value.isEmpty || (value == '0' && label != "Zip Code") || value.toLowerCase() == "n/a" || value.toLowerCase() == "not specified") {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Row(children: [
+          FaIcon(icon, size: 17, color: _iconColor.withOpacity(0.85)), const SizedBox(width: 12),
+          Text("$label:", style: GoogleFonts.lato(fontWeight: FontWeight.w600, color: _primaryTextColor.withOpacity(0.9), fontSize: 15)), const SizedBox(width: 8),
+          Expanded(child: Text(value, style: GoogleFonts.lato(fontSize: 15, color: _secondaryTextColor), overflow: TextOverflow.ellipsis)),
+      ]),
+    );
+  }
+  
+  void _navigateToCreateTaskPage() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => CreateTaskPage(baseUrl: _baseUrl, storage: _storage)),
+    );
+    if (result == true && mounted) {
+      _fetchMyTasks(); 
+    }
+  }
+
+  void _navigateToUpdateTaskPage(Map<String, dynamic> task) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UpdateTaskPage(
+          baseUrl: _baseUrl,
+          storage: _storage,
+          task: task,
+        ),
+      ),
+    );
+    if (result == true && mounted) {
+      _fetchMyTasks(); 
+    }
+  }
+
+  void _showFilteredTasks(String statusFilter) {
+    final filtered = _allMyTasksOriginal.where((task) => (task['status']?.toString().toLowerCase() ?? 'unknown') == statusFilter.toLowerCase()).toList();
+    
+    if (filtered.isEmpty) {
+      _showMessage("No ${statusFilter.myCapitalizeFirst()} tasks found.", isError: false);
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Text("${statusFilter.myCapitalizeFirst()} Tasks", style: GoogleFonts.lato(fontWeight: FontWeight.bold, color: _iconColor)),
+          contentPadding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: MediaQuery.of(context).size.height * 0.5, // تعديل الارتفاع
+            child: filtered.isEmpty
+                ? Center(child: Text("No tasks in this category.", style: GoogleFonts.lato(color: _secondaryTextColor)))
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: filtered.length,
+                    itemBuilder: (BuildContext context, int index) {
+                      final task = filtered[index];
+                      String subtitle = "Provider: ${task['provider_name']?.toString() ?? 'N/A'}";
+                      if (statusFilter.toLowerCase() == 'rejected' && task['rejection_reason'] != null && (task['rejection_reason'].toString()).isNotEmpty) {
+                        subtitle += '\nReason: ${task['rejection_reason'].toString()}';
+                      }
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundImage: (task['provider_image'] != null && (task['provider_image'].toString()).isNotEmpty && Uri.tryParse(task['provider_image'].toString())?.hasAbsolutePath == true)
+                              ? NetworkImage(task['provider_image'].toString())
+                              : null,
+                          child: (task['provider_image'] == null || (task['provider_image'].toString()).isEmpty || Uri.tryParse(task['provider_image'].toString())?.hasAbsolutePath != true)
+                              ? Icon(Icons.person_pin_circle_rounded, color: _iconColor.withOpacity(0.7))
+                              : null,
+                          backgroundColor: Colors.grey.shade200,
+                        ),
+                        title: Text(task['description']?.toString() ?? 'No description', style: GoogleFonts.lato(fontWeight: FontWeight.w500)),
+                        subtitle: Text(subtitle, style: GoogleFonts.lato(color: _secondaryTextColor, fontSize: 13)),
+                        onTap: () {
+                          Navigator.pop(dialogContext);
+                          _showTaskDetailDialog(task); 
+                        },
+                      );
+                    },
+                  ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: Text('Close', style: GoogleFonts.lato(color: _iconColor, fontWeight: FontWeight.bold)),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+  
+  void _showTaskDetailDialog(Map<String, dynamic> task) {
+      final String status = task['status']?.toString() ?? 'unknown';
+      String rejectionReason = task['rejection_reason']?.toString() ?? '';
+      String initialPrice = task['Initial_price']?.toString() ?? 'N/A';
+      String maxPrice = task['Maximum_price']?.toString() ?? 'N/A';
+      String priceRange = (initialPrice == maxPrice || maxPrice == 'N/A' || (initialPrice == '0' && maxPrice == '0')) 
+                        ? (initialPrice != 'N/A' && initialPrice != '0' ? "\$$initialPrice" : "Price not set") 
+                        : "\$$initialPrice - \$$maxPrice";
+      if (initialPrice == 'N/A' && maxPrice == 'N/A') priceRange = "Price not set";
+      else if (initialPrice == 'N/A' && maxPrice != 'N/A' && maxPrice != '0') priceRange = "Up to \$$maxPrice";
+      else if (maxPrice == 'N/A' && initialPrice != 'N/A' && initialPrice != '0') priceRange = "From \$$initialPrice";
+
+
+      Color statusColor = _getStatusColor(status);
+
+      showDialog(
+          context: context,
+          builder: (BuildContext dialogContext) {
+              return AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(Icons.task_alt_rounded, color: _iconColor),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text("Task Details", style: GoogleFonts.lato(fontWeight: FontWeight.bold, color: _iconColor))),
+                    ],
+                  ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  backgroundColor: _pageBackgroundColorTop.withOpacity(0.98),
+                  content: SingleChildScrollView(
+                      child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                              _buildDetailRow(Icons.description_outlined, "Description:", task['description']?.toString() ?? 'N/A'),
+                              _buildDetailRow(Icons.person_outline_rounded, "Provider:", task['provider_name']?.toString() ?? 'N/A'),
+                              _buildDetailRow(FontAwesomeIcons.tag, "Category:", task['provider_category']?.toString() ?? 'N/A'),
+                              _buildDetailRow(Icons.category_outlined, "Status:", status.myCapitalizeFirst(), valueColor: statusColor),
+                              if (status.toLowerCase() == 'rejected' && rejectionReason.isNotEmpty)
+                                _buildDetailRow(Icons.report_problem_outlined, "Rejection Reason:", rejectionReason, valueColor: Colors.red.shade700),
+                              if (priceRange != "Price not set")
+                                _buildDetailRow(Icons.attach_money_rounded, "Price:", priceRange),
+                              _buildDetailRow(Icons.timer_outlined, "Est. Timing:", task['estimated_timing']?.toString() ?? 'N/A'),
+                              _buildDetailRow(Icons.social_distance_rounded, "Est. Distance:", task['estimated_distance'] != null ? "${task['estimated_distance']} km" : 'N/A'),
+                              _buildDetailRow(Icons.notes_rounded, "Notes:", task['notes']?.toString() ?? 'None'),
+                              _buildDetailRow(Icons.update_rounded, "Last Updated:", task['updated'] != null ? (DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.parse(task['updated'].toString()).toLocal())) : 'N/A' ),
+                          ],
+                      ),
+                  ),
+                  actionsAlignment: MainAxisAlignment.spaceBetween,
+                  actionsPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+                  actions: <Widget>[
+                      if (status.toLowerCase() == 'pending' || status.toLowerCase() == 'approved' || status.toLowerCase() == 'in progress' )
+                          TextButton.icon(
+                              icon: Icon(Icons.edit_note_rounded, color: _iconColor),
+                              label: Text('Update Task', style: GoogleFonts.lato(color: _iconColor, fontWeight: FontWeight.w600)),
+                              onPressed: () {
+                                  Navigator.of(dialogContext).pop();
+                                  _navigateToUpdateTaskPage(task);
+                              },
+                          ),
+                      TextButton(
+                          child: Text('Close', style: GoogleFonts.lato(color: _secondaryTextColor)),
+                          onPressed: () {
+                              Navigator.of(dialogContext).pop();
+                          },
+                      ),
+                  ],
+              );
+          },
+      );
+  }
+
+  Widget _buildDetailRow(IconData icon, String label, String value, {Color? valueColor}) { 
+    if (value.trim().toLowerCase() == 'n/a' || value.trim().isEmpty) {
+      if (label == "Notes:" && value.trim().toLowerCase() == 'none') {
+        // استمر في عرض "None" للملاحظات
+      } else {
+        return const SizedBox.shrink(); // إخفاء الصف إذا كانت القيمة فارغة أو "N/A" (ما عدا الملاحظات)
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: _iconColor.withOpacity(0.8)),
+          const SizedBox(width: 8),
+          Text(label, style: GoogleFonts.lato(fontWeight: FontWeight.w600, color: _primaryTextColor)),
+          const SizedBox(width: 5),
+          Expanded(child: Text(value, style: GoogleFonts.lato(color: valueColor ?? _secondaryTextColor))),
+        ],
+      ),
+    );
+  }
+
+
+
+  @override
+  Widget build(BuildContext context) {
+    String? avatarUrl = _clientDataForAvatar?["image_url"]?.toString();
+    
+    return Scaffold(
+      backgroundColor: Colors.transparent, 
+      appBar: AppBar(
+        backgroundColor: _appBarColor, elevation: 1,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              decoration: BoxDecoration(
+                color: _pageBackgroundColorTop.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(20)
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _searchTypeForAPIAppBar,
+                  icon: Icon(Icons.arrow_drop_down_rounded, color: _iconColor, size: 24),
+                  style: GoogleFonts.lato(color: _appBarItemColor, fontSize: 14, fontWeight: FontWeight.w500),
+                  items: _filterTypeOptions.map((String value) {
+                    return DropdownMenuItem<String>(
+                      value: value,
+                      child: Text(value.myCapitalizeFirst()),
+                    );
+                  }).toList(),
+                  onChanged: (String? newValue) {
+                    if (newValue != null) {
+                      setState(() {
+                        _searchTypeForAPIAppBar = newValue;
+                        if (_searchQueryController.text.isNotEmpty) {
+                           _performSearchOrFilter(queryFromSearchField: _searchQueryController.text);
+                        }
+                      });
+                    }
+                  },
+                  dropdownColor: _pageBackgroundColorTop,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SizedBox(height: 42, child: TextField(
+                  controller: _searchQueryController,
+                  decoration: InputDecoration(
+                    hintText: "Search by category/name...",
+                    hintStyle: GoogleFonts.lato(fontSize: 14.5, color: Colors.grey.shade500),
+                    filled: true, fillColor: _pageBackgroundColorTop.withOpacity(0.8),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(25), borderSide: BorderSide.none),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(25), borderSide: BorderSide(color: _appBarItemColor, width: 1.5)),
+                  ),
+                   onChanged: (query){ 
+                     _currentSearchQueryText = query;
+                  },
+                  onSubmitted: (query) {
+                    if (query.isNotEmpty) _performSearchOrFilter(queryFromSearchField: query);
+                    else setState(() { _results = []; _resultsErrorMessage = null; _currentSearchQueryText = ""; _loadInitialBrowseContent();}); 
+                  },
+                  textInputAction: TextInputAction.search,
+              )),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(icon: Icon(Icons.filter_alt_rounded, color: _appBarItemColor), onPressed: _showFilterDialog, tooltip: "Filters"),
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert_rounded, color: _appBarItemColor),
+            onSelected: (value) { 
+              if (value == 'logout') _logout(); 
+              else if (value == 'create_task') _navigateToCreateTaskPage();
+              else if (value == 'cancelled_tasks') _showFilteredTasks('cancelled');
+              else if (value == 'rejected_tasks') _showFilteredTasks('rejected');
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(value: 'create_task', child: Row(children: [Icon(Icons.add_circle_outline_rounded, color: _iconColor.withOpacity(0.8)), SizedBox(width: 8), Text('Create New Task', style: GoogleFonts.lato())])),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(value: 'cancelled_tasks', child: Row(children: [Icon(Icons.cancel_presentation_rounded, color: _iconColor.withOpacity(0.8)), SizedBox(width: 8), Text('Cancelled Tasks', style: GoogleFonts.lato())])),
+              PopupMenuItem<String>(value: 'rejected_tasks', child: Row(children: [Icon(Icons.thumb_down_alt_outlined, color: _iconColor.withOpacity(0.8)), SizedBox(width: 8), Text('Rejected Tasks', style: GoogleFonts.lato())])),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(value: 'logout', child: Row(children: [Icon(Icons.logout_rounded, color: Colors.red.shade600), SizedBox(width: 8), Text('Logout', style: GoogleFonts.lato(color: Colors.red.shade700))])),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 10.0, left: 0),
+            child: GestureDetector(
+              onTap: (){ 
+                if (_currentIndex != 1) setState(()=> _currentIndex = 1); _showProfileDialog(); 
+              },
+              child: Hero(tag: 'client-home-avatar-appbar', child: CircleAvatar(
+                radius: 18, backgroundColor: _appBarItemColor.withOpacity(0.1),
+                backgroundImage: (avatarUrl != null && avatarUrl.isNotEmpty && Uri.tryParse(avatarUrl)?.hasAbsolutePath == true) ? NetworkImage(avatarUrl) : null,
+                child: (_isLoadingAvatar) ? const SizedBox(width:16, height:16, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey,)) : ((avatarUrl == null || avatarUrl.isEmpty || Uri.tryParse(avatarUrl)?.hasAbsolutePath != true) ? Icon(Icons.person, color: _appBarItemColor.withOpacity(0.7), size: 20,) : null),
+              )),
+            ),
+          ),
+        ],
+      ),
+      body: Container(
+          decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_pageBackgroundColorTop, _pageBackgroundColorBottom],
+            begin: Alignment.topCenter, end: Alignment.bottomCenter, stops: const [0.2, 0.9],
+          ),
+        ),
+        child: _buildCurrentPage(),
+      ),
+      floatingActionButton: FadeInUp(
+        delay: Duration(milliseconds: 800),
+        child: FloatingActionButton.extended(
+          onPressed: _navigateToCreateTaskPage,
+          label: Text('New Task', style: GoogleFonts.lato(fontWeight: FontWeight.bold, color: Colors.white)),
+          icon: const Icon(Icons.add_rounded, color: Colors.white),
+          backgroundColor: _iconColor,
+          elevation: 4,
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          setState(() => _currentIndex = index);
+          if (index == 1) { 
+             _showProfileDialog();
+          } else if (index == 0) { 
+            if (_searchQueryController.text.isNotEmpty || 
+                _selectedFilterTypeDialog != (_filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers') || 
+                _filterCityController.text.isNotEmpty || 
+                _filterCategoryController.text.isNotEmpty ||
+                _selectedMinRatingDialog != (_ratingOptionsForFilter.isNotEmpty ? _ratingOptionsForFilter.first : null) ||
+                _results.isNotEmpty || 
+                _resultsErrorMessage != null) {
+              _loadInitialBrowseContent(); 
+            }
+            if (_allMyTasksOriginal.isEmpty && !_isLoadingMyTasks && _myTasksErrorMessage == null) { 
+                _fetchMyTasks();
+            }
+          } else if (index == 2) { 
+             _showMessage("Settings page - TODO"); 
+          }
+        },
+        selectedItemColor: _activeBottomNavItemColor, unselectedItemColor: _inactiveBottomNavItemColor,
+        backgroundColor: _appBarColor, type: BottomNavigationBarType.fixed,
+        selectedLabelStyle: GoogleFonts.lato(fontWeight: FontWeight.w600, fontSize: 12),
+        unselectedLabelStyle: GoogleFonts.lato(fontSize: 11.5), elevation: 8,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(FontAwesomeIcons.houseChimneyWindow), label: "Home"),
+          BottomNavigationBarItem(icon: Icon(FontAwesomeIcons.solidUserCircle), label: "Profile"),
+          BottomNavigationBarItem(icon: Icon(FontAwesomeIcons.sliders), label: "Settings"),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCurrentPage() {
+    bool filtersAreActive = (_selectedFilterTypeDialog != (_filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers') || 
+                           _filterCityController.text.isNotEmpty || 
+                           _filterCategoryController.text.isNotEmpty ||
+                           _selectedMinRatingDialog != (_ratingOptionsForFilter.isNotEmpty ? _ratingOptionsForFilter.first : null));
+
+    if (_searchQueryController.text.isNotEmpty || filtersAreActive || _isProcessing || _results.isNotEmpty || (_resultsErrorMessage != null && _results.isEmpty) ) {
+      return _buildResultsDisplay();
+    }
+    return _buildBrowseContent();
+  }
+
+  Widget _buildBrowseContent() {
+    if (_isLoadingMyTasks && _allMyTasksOriginal.isEmpty && _approvedTasksOriginal.isEmpty) { 
+      return Center(child: CircularProgressIndicator(color: _iconColor));
+    }
+
+    List<dynamic> visibleAllTasks = _allMyTasksOriginal.where((task) {
+      final taskId = task['id'];
+      return !_globallyHiddenTaskIds.contains(taskId);
+    }).toList();
+
+    List<dynamic> visibleApprovedTasks = _approvedTasksOriginal.where((task) {
+       final taskId = task['id'];
+       return !_globallyHiddenTaskIds.contains(taskId);
+    }).toList();
+
+
+    return ListView(
+      key: const PageStorageKey<String>('browseContent'),
+      padding: const EdgeInsets.fromLTRB(12, 16, 12, 80), 
+      children: [
+        _buildSectionHeader("My Tasks", () { _fetchMyTasks(); }),
+        const SizedBox(height: 8),
+        _buildTasksListVertical(visibleAllTasks, _myTasksErrorMessage, isMyTasksSection: true),
+
+        if (visibleApprovedTasks.isNotEmpty) ...[ 
+          const SizedBox(height: 20),
+          _buildSectionHeader("Approved by Provider", () { _fetchMyTasks(); }), 
+          const SizedBox(height: 8),
+          _buildTasksListVertical(visibleApprovedTasks, null, isMyTasksSection: false),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String title, VoidCallback onRefresh) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: GoogleFonts.lato(fontSize: 19, fontWeight: FontWeight.bold, color: _primaryTextColor)),
+        TextButton.icon(
+          onPressed: onRefresh,
+          icon: Icon(Icons.refresh_rounded, size: 20, color: _iconColor),
+          label: Text("Refresh", style: GoogleFonts.lato(color: _iconColor, fontWeight: FontWeight.w600, fontSize: 13)),
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildTasksListVertical(List<dynamic> tasksToDisplay, String? errorMessage, {required bool isMyTasksSection}) {
+    if (isMyTasksSection && _isLoadingMyTasks && tasksToDisplay.isEmpty) {
+      return SizedBox(height: 180, child: Center(child: CircularProgressIndicator(color: _iconColor)));
+    }
+    if (isMyTasksSection && errorMessage != null && tasksToDisplay.isEmpty) {
+      return SizedBox(
+        height: 150, 
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.task_alt_outlined, size: 40, color: _secondaryTextColor.withOpacity(0.6)),
+                SizedBox(height:10),
+                Text(errorMessage, style: GoogleFonts.lato(color: _secondaryTextColor, fontSize: 15), textAlign: TextAlign.center),
+                SizedBox(height:10),
+                if (errorMessage.contains("no tasks yet"))
+                 ElevatedButton.icon(
+                   icon: Icon(Icons.add_circle_outline, size: 18, color: Colors.white),
+                   label: Text("Create Task", style: GoogleFonts.lato(color: Colors.white, fontWeight: FontWeight.bold)),
+                   onPressed: _navigateToCreateTaskPage,
+                   style: ElevatedButton.styleFrom(backgroundColor: _iconColor, padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8)),
+                 )
+                else 
+                  TextButton.icon(
+                    icon: Icon(Icons.refresh_rounded, size: 20, color: _iconColor),
+                    label: Text("Retry", style: GoogleFonts.lato(color: _iconColor, fontWeight: FontWeight.bold)),
+                    onPressed: _fetchMyTasks,
+                  ),
+              ],
+            ),
+          )
+        ),
+      );
+    }
+     if (tasksToDisplay.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20.0),
+        child: Center(child: Text(
+          isMyTasksSection ? "You don't have any tasks yet." : "No tasks currently approved by providers.", 
+          style: GoogleFonts.lato(color: _secondaryTextColor, fontSize: 15, ), textAlign: TextAlign.center,
+        )
+        ),
+      );
+    }
+    
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: tasksToDisplay.length,
+      itemBuilder: (context, index) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10.0),
+          child: FadeInUp(
+            delay: Duration(milliseconds: 80 * index), 
+            child: _buildMyTaskCardVertical(tasksToDisplay[index]),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMyTaskCardVertical(Map<String, dynamic> task) {
+    final String status = task['status']?.toString().toLowerCase() ?? 'unknown';
+    Color statusColor = _getStatusColor(status);
+    IconData statusIcon = _getStatusIcon(status);
+
+    String providerImage = task['provider_image']?.toString() ?? '';
+    String initialPrice = task['Initial_price']?.toString() ?? 'N/A';
+    String maxPrice = task['Maximum_price']?.toString() ?? 'N/A';
+    String priceRange = (initialPrice == maxPrice || maxPrice == 'N/A' || (initialPrice == '0' && maxPrice == '0')) 
+                        ? (initialPrice != 'N/A' && initialPrice != '0' ? "\$$initialPrice" : "Price not set") 
+                        : "\$$initialPrice - \$$maxPrice";
+    if (initialPrice == 'N/A' && maxPrice == 'N/A') priceRange = "Price not set";
+    else if (initialPrice == 'N/A' && maxPrice != 'N/A' && maxPrice != '0') priceRange = "Up to \$$maxPrice";
+    else if (maxPrice == 'N/A' && initialPrice != 'N/A' && initialPrice != '0') priceRange = "From \$$initialPrice";
+
+    return Card(
+      color: _cardBackgroundColor,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 3,
+      child: InkWell(
+        onTap: () => _showTaskDetailDialog(task),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(14.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundImage: (providerImage.isNotEmpty && Uri.tryParse(providerImage)?.hasAbsolutePath == true) ? NetworkImage(providerImage) : null,
+                    backgroundColor: Colors.grey.shade200,
+                    child: (providerImage.isEmpty || Uri.tryParse(providerImage)?.hasAbsolutePath != true) ? Icon(Icons.person_pin_circle_rounded, size: 24, color: _iconColor.withOpacity(0.7)) : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          task['provider_name']?.toString() ?? 'Provider N/A', 
+                          style: GoogleFonts.lato(fontSize: 15, fontWeight: FontWeight.w600, color: _primaryTextColor),
+                          overflow: TextOverflow.ellipsis
+                        ),
+                        Text(
+                          task['provider_category']?.toString() ?? 'Service', 
+                          style: GoogleFonts.lato(fontSize: 13, color: _secondaryTextColor), 
+                          overflow: TextOverflow.ellipsis
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                task['description']?.toString() ?? 'No description',
+                style: GoogleFonts.lato(fontSize: 14, fontWeight: FontWeight.w500, color: _primaryTextColor),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              if (priceRange != "Price not set")
+                Text(
+                  priceRange,
+                  style: GoogleFonts.lato(fontSize: 13.5, fontWeight: FontWeight.bold, color: _iconColor),
+                ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(statusIcon, color: statusColor, size: 18),
+                  const SizedBox(width: 6),
+                  Text(status.myCapitalizeFirst(), style: GoogleFonts.lato(fontSize: 13, fontWeight: FontWeight.w500, color: statusColor)),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    status = status.toLowerCase();
+    switch (status) {
+      case 'pending': return Colors.orange.shade700;
+      case 'approved':
+      case 'accepted': return Colors.green.shade700;
+      case 'in progress': return Colors.blue.shade700;
+      case 'completed': return _iconColor;
+      case 'rejected': return Colors.red.shade700;
+      case 'cancelled': return Colors.red.shade400;
+      default: return Colors.grey.shade600;
+    }
+  }
+
+  IconData _getStatusIcon(String status) {
+    status = status.toLowerCase();
+    switch (status) {
+      case 'pending': return Icons.pending_actions_rounded;
+      case 'approved':
+      case 'accepted': return Icons.check_circle_outline_rounded;
+      case 'in progress': return Icons.construction_rounded;
+      case 'completed': return Icons.task_alt_rounded;
+      case 'rejected': return Icons.cancel_outlined;
+      case 'cancelled': return Icons.do_not_disturb_on_outlined;
+      default: return Icons.help_outline_rounded;
+    }
+  }
+
+   Widget _buildResultsDisplay() {
+    if (_isProcessing) {
+      return Center(child: CircularProgressIndicator(color: _iconColor));
+    }
+    if (_resultsErrorMessage != null && _results.isEmpty) { 
+      return _buildResultsErrorWidget();
+    }
+    if (_results.isEmpty && _currentSearchQueryText.isNotEmpty && !_isProcessing) { 
+      return _buildEmptyResultsWidget();
+    }
+     if (_results.isEmpty && !_isProcessing) {
+      return _buildBrowseContent();
+    }
+
+    String resultDisplayType = _lastOperationResultType; 
+
+    return ListView.builder(
+      key: const PageStorageKey<String>('searchResults'),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 80), 
+      itemCount: _results.length,
+      itemBuilder: (context, index) {
+        final item = _results[index];
+        if (resultDisplayType == 'providers') {
+          return FadeInUp(delay: Duration(milliseconds: 80 * index), child: _buildProviderSearchCard(item));
+        } else if (resultDisplayType == 'companies') {
+          return FadeInUp(delay: Duration(milliseconds: 80 * index), child: _buildCompanySearchCard(item));
+        }
+        return const SizedBox.shrink();
+      },
+    );
+  }
+
+  void _navigateToProviderProfile(int providerId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProviderProfilePage(
+          providerId: providerId,
+          baseUrl: _baseUrl,
+          storage: _storage,
+        ),
+      ),
+    );
+  }
+  
+  void _navigateToCompanyProfile(int companyId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CompanyDetailPage(
+          companyId: companyId,
+          baseUrl: _baseUrl,
+          storage: _storage,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProviderSearchCard(Map<String, dynamic> provider) {
+    String? imageUrl = provider['image_url']?.toString();
+    int? providerId = int.tryParse(provider['id']?.toString() ?? provider['user_id']?.toString() ?? provider['provider_id']?.toString() ?? '');
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8), color: _cardBackgroundColor, elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.all(12),
+        leading: CircleAvatar(radius: 28, backgroundImage: (imageUrl != null && imageUrl.isNotEmpty) ? NetworkImage(imageUrl) : null, child: (imageUrl == null || imageUrl.isEmpty) ? Icon(Icons.person_rounded, size: 28, color: _iconColor.withOpacity(0.6)) : null),
+        title: Text("${provider['first_name']?.toString() ?? ''} ${provider['last_name']?.toString() ?? ''}".trim(), style: GoogleFonts.lato(fontWeight: FontWeight.bold, fontSize: 16, color: _primaryTextColor)),
+        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(provider['category_name']?.toString() ?? (provider['position']?.toString() ?? 'No category/position'), style: GoogleFonts.lato(color: _iconColor, fontSize: 13.5, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 2),
+            Text(provider['city_name']?.toString() ?? 'No city', style: GoogleFonts.lato(color: _secondaryTextColor, fontSize: 12.5)),
+            if (provider['avg_rating'] != null && double.tryParse(provider['avg_rating'].toString()) != null)
+              Row(children: [Icon(Icons.star_rate_rounded, color: Colors.amber.shade700, size: 16), const SizedBox(width:3), Text(double.parse(provider['avg_rating'].toString()).toStringAsFixed(1), style: GoogleFonts.lato(fontSize: 12.5, fontWeight: FontWeight.w500))]),
+        ]),
+        trailing: Icon(Icons.arrow_forward_ios_rounded, size: 18, color: _iconColor.withOpacity(0.7)),
+        onTap: () { 
+          if (providerId != null) {
+            _navigateToProviderProfile(providerId);
+          } else {
+            _showMessage("Provider ID not found, cannot view profile.", isError: true);
+          }
+        },
+      ),
+    );
+  }
+  
+  Widget _buildCompanySearchCard(Map<String, dynamic> company) {
+    String? imageUrl = company['image_url']?.toString();
+    int? companyId = int.tryParse(company['id']?.toString() ?? '');
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8), color: _cardBackgroundColor, elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.all(12),
+        leading: CircleAvatar(radius: 28, backgroundImage: (imageUrl != null && imageUrl.isNotEmpty) ? NetworkImage(imageUrl) : null, child: (imageUrl == null || imageUrl.isEmpty) ? Icon(Icons.business_center_rounded, size: 28, color: _iconColor.withOpacity(0.6)) : null),
+        title: Text(company['name']?.toString() ?? 'Unknown Company', style: GoogleFonts.lato(fontWeight: FontWeight.bold, fontSize: 16, color: _primaryTextColor)),
+        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(company['description']?.toString() ?? 'No description', maxLines: 1, overflow: TextOverflow.ellipsis, style: GoogleFonts.lato(color: _secondaryTextColor, fontSize: 12.5)),
+            if (company['avg_rating'] != null && double.tryParse(company['avg_rating'].toString()) != null)
+              Row(children: [Icon(Icons.star_rate_rounded, color: Colors.amber.shade700, size: 16), const SizedBox(width:3), Text(double.parse(company['avg_rating'].toString()).toStringAsFixed(1), style: GoogleFonts.lato(fontSize: 12.5, fontWeight: FontWeight.w500))]),
+        ]),
+        trailing: Icon(Icons.arrow_forward_ios_rounded, size: 18, color: _iconColor.withOpacity(0.7)),
+        onTap: () { 
+          if(companyId != null){
+             _navigateToCompanyProfile(companyId);
+          } else {
+             _showMessage("Company ID not found.", isError: true);
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildResultsErrorWidget() {
+    return Center(child: Padding(padding: const EdgeInsets.all(30.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.error_outline_rounded, color: _iconColor.withOpacity(0.6), size: 60), const SizedBox(height: 15),
+          Text(_resultsErrorMessage ?? "An error occurred.", style: GoogleFonts.lato(color: _iconColor, fontSize: 17, fontWeight: FontWeight.w500), textAlign: TextAlign.center), const SizedBox(height: 20),
+          ElevatedButton.icon(icon: Icon(Icons.refresh_rounded, color: Colors.white), label: Text("Try Again", style: GoogleFonts.lato(color: Colors.white, fontWeight: FontWeight.bold)), onPressed: () {
+            bool wereFiltersApplied = (
+                                      _selectedFilterTypeDialog != (_filterTypeOptions.isNotEmpty ? _filterTypeOptions.first : 'providers') || 
+                                      _filterCityController.text.isNotEmpty || 
+                                      _filterCategoryController.text.isNotEmpty || 
+                                      _selectedMinRatingDialog != (_ratingOptionsForFilter.isNotEmpty ? _ratingOptionsForFilter.first : null)
+                                    );
+            if (wereFiltersApplied) { _performSearchOrFilter(isFilterSearch: true); } 
+            else if (_currentSearchQueryText.isNotEmpty) { _performSearchOrFilter(queryFromSearchField: _currentSearchQueryText); } 
+            else { _loadInitialBrowseContent(); }
+          } , style: ElevatedButton.styleFrom(backgroundColor: _iconColor, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))))
+    ])));
+  }
+  
+  Widget _buildEmptyResultsWidget() {
+    return Center(child: Padding(padding: const EdgeInsets.all(30.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.search_off_rounded, color: _iconColor.withOpacity(0.5), size: 60), const SizedBox(height: 15),
+          Text(_resultsErrorMessage ?? "No results found for your criteria.", style: GoogleFonts.lato(color: _iconColor.withOpacity(0.7), fontSize: 17, fontWeight: FontWeight.w500), textAlign: TextAlign.center),
+          const SizedBox(height: 15),
+          Text("Try adjusting your search or filter criteria.", style: GoogleFonts.lato(color: _iconColor.withOpacity(0.6), fontSize: 14), textAlign: TextAlign.center),
+    ])));
+  }
+}
+

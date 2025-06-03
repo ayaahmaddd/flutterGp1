@@ -370,7 +370,8 @@ class _JobDetailPageState extends State<JobDetailPage> with TickerProviderStateM
             if (_jobData == null) { _showMessage("Job data loading, please wait.", isError: true); return; }
             if (!mounted) return;
             Navigator.push(context, MaterialPageRoute(builder: (context) => ApplicantsPage(
-                  jobId: widget.jobId, jobName: _jobData!['name']?.toString() ?? "Applicants",
+                  jobId: widget.jobId, jobName: _jobData!['name']?.toString() ?? "Applicants", companyId: widget.companyId,
+
                   // applicants: applicantsData, // Pass if ApplicantsPage expects it directly
             )));
           },

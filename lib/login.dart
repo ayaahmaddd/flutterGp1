@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_application_2/client_dashboard_page.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -12,6 +13,7 @@ import 'signup.dart';
 import 'forgetpass.dart';
 import 'home.dart'; // for Provider
 import 'my_companies_page.dart'; // for Company
+import 'client_home_page.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -126,6 +128,14 @@ class _LoginScreenState extends State<LoginScreen> {
             MaterialPageRoute(builder: (_) => const HomePage()),
             (route) => false,
           );
+  } else if (userType == 'Client') { // <<--- ✅ إضافة هذا الشرط
+      print("Navigating to Client home page (ClientHomePage)...");
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => ClientDashboardPage()), // انتقل إلى صفحة العميل
+        (route) => false,
+      );
+
+
         } else {
           _showMessage('Unknown user type: $userType', isError: true);
         }
@@ -234,14 +244,14 @@ class _LoginScreenState extends State<LoginScreen> {
                       : const Text('LOGIN'),
                 ),
                 const SizedBox(height: 20),
-                Row(
+                const Row(
                   children: [
-                    const Expanded(child: Divider()),
-                    const Padding(
+                    Expanded(child: Divider()),
+                    Padding(
                       padding: EdgeInsets.symmetric(horizontal: 10),
                       child: Text("Or continue with"),
                     ),
-                    const Expanded(child: Divider()),
+                    Expanded(child: Divider()),
                   ],
                 ),
                 const SizedBox(height: 15),
